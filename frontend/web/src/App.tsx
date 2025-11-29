@@ -5,19 +5,28 @@ import { getContractReadOnly, getContractWithSigner } from "./components/useCont
 import "./App.css";
 import { useAccount } from 'wagmi';
 import { useFhevm, useEncrypt, useDecrypt } from '../fhevm-sdk/src';
+import { ethers } from 'ethers';
 
 interface SocialMiningData {
   id: string;
   name: string;
-  socialValue: number;
-  activityScore: number;
-  timestamp: number;
-  creator: string;
+  encryptedValue: string;
   publicValue1: number;
   publicValue2: number;
+  description: string;
+  timestamp: number;
+  creator: string;
   isVerified?: boolean;
   decryptedValue?: number;
-  description: string;
+}
+
+interface UserContribution {
+  userId: string;
+  name: string;
+  encryptedScore: number;
+  publicScore: number;
+  rank: number;
+  lastActive: number;
 }
 
 const App: React.FC = () => {
@@ -26,25 +35,20 @@ const App: React.FC = () => {
   const [miningData, setMiningData] = useState<SocialMiningData[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [creatingMining, setCreatingMining] = useState(false);
+  const [creatingData, setCreatingData] = useState(false);
   const [transactionStatus, setTransactionStatus] = useState<{ visible: boolean; status: "pending" | "success" | "error"; message: string; }>({ 
     visible: false, 
     status: "pending", 
     message: "" 
   });
-  const [newMiningData, setNewMiningData] = useState({ 
-    name: "", 
-    socialValue: "", 
-    activity: "",
-    description: ""
-  });
-  const [selectedMining, setSelectedMining] = useState<SocialMiningData | null>(null);
+  const [newMiningData, setNewMiningData] = useState({ name: "", value: "", description: "" });
+  const [selectedData, setSelectedData] = useState<SocialMiningData | null>(null);
   const [decryptedValue, setDecryptedValue] = useState<number | null>(null);
   const [isDecrypting, setIsDecrypting] = useState(false);
   const [contractAddress, setContractAddress] = useState("");
   const [fhevmInitializing, setFhevmInitializing] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterVerified, setFilterVerified] = useState(false);
+  const [userContributions, setUserContributions] = useState<UserContribution[]>([]);
+  const [stats, setStats] = useState({ totalUsers: 0, totalValue: 0, avgScore: 0 });
 
   const { status, initialize, isInitialized } = useFhevm();
   const { encrypt, isEncrypting } = useEncrypt();
@@ -52,7 +56,8 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const initFhevmAfterConnection = async () => {
-      if (!isConnected || isInitialized || fhevmInitializing) return;
+      if (!isConnected) return;
+      if (isInitialized || fhevmInitializing) return;
       
       try {
         setFhevmInitializing(true);
@@ -102,36 +107,59 @@ const App: React.FC = () => {
       if (!contract) return;
       
       const businessIds = await contract.getAllBusinessIds();
-      const miningList: SocialMiningData[] = [];
+      const dataList: SocialMiningData[] = [];
       
       for (const businessId of businessIds) {
         try {
           const businessData = await contract.getBusinessData(businessId);
-          miningList.push({
+          dataList.push({
             id: businessId,
             name: businessData.name,
-            socialValue: 0,
-            activityScore: Number(businessData.publicValue1) || 0,
-            timestamp: Number(businessData.timestamp),
-            creator: businessData.creator,
+            encryptedValue: businessId,
             publicValue1: Number(businessData.publicValue1) || 0,
             publicValue2: Number(businessData.publicValue2) || 0,
+            description: businessData.description,
+            timestamp: Number(businessData.timestamp),
+            creator: businessData.creator,
             isVerified: businessData.isVerified,
-            decryptedValue: Number(businessData.decryptedValue) || 0,
-            description: businessData.description
+            decryptedValue: Number(businessData.decryptedValue) || 0
           });
         } catch (e) {
           console.error('Error loading business data:', e);
         }
       }
       
-      setMiningData(miningList);
+      setMiningData(dataList);
+      generateMockContributions();
     } catch (e) {
       setTransactionStatus({ visible: true, status: "error", message: "Failed to load data" });
       setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
     } finally { 
       setIsRefreshing(false); 
     }
+  };
+
+  const generateMockContributions = () => {
+    const contributions: UserContribution[] = [];
+    const users = ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry"];
+    
+    users.forEach((user, index) => {
+      contributions.push({
+        userId: `user-${index}`,
+        name: user,
+        encryptedScore: Math.floor(Math.random() * 1000) + 500,
+        publicScore: Math.floor(Math.random() * 100) + 50,
+        rank: index + 1,
+        lastActive: Date.now() - Math.floor(Math.random() * 86400000)
+      });
+    });
+    
+    setUserContributions(contributions);
+    setStats({
+      totalUsers: contributions.length,
+      totalValue: contributions.reduce((sum, user) => sum + user.encryptedScore, 0),
+      avgScore: Math.round(contributions.reduce((sum, user) => sum + user.publicScore, 0) / contributions.length)
+    });
   };
 
   const createMiningData = async () => {
@@ -141,24 +169,24 @@ const App: React.FC = () => {
       return; 
     }
     
-    setCreatingMining(true);
-    setTransactionStatus({ visible: true, status: "pending", message: "Creating social mining data with FHE..." });
+    setCreatingData(true);
+    setTransactionStatus({ visible: true, status: "pending", message: "Creating encrypted social data..." });
     
     try {
       const contract = await getContractWithSigner();
       if (!contract) throw new Error("Failed to get contract with signer");
       
-      const socialValue = parseInt(newMiningData.socialValue) || 0;
-      const businessId = `mining-${Date.now()}`;
+      const intValue = parseInt(newMiningData.value) || 0;
+      const businessId = `social-${Date.now()}`;
       
-      const encryptedResult = await encrypt(contractAddress, address, socialValue);
+      const encryptedResult = await encrypt(contractAddress, address, intValue);
       
       const tx = await contract.createBusinessData(
         businessId,
         newMiningData.name,
         encryptedResult.encryptedData,
         encryptedResult.proof,
-        parseInt(newMiningData.activity) || 0,
+        0,
         0,
         newMiningData.description
       );
@@ -166,14 +194,14 @@ const App: React.FC = () => {
       setTransactionStatus({ visible: true, status: "pending", message: "Waiting for transaction confirmation..." });
       await tx.wait();
       
-      setTransactionStatus({ visible: true, status: "success", message: "Social mining data created successfully!" });
+      setTransactionStatus({ visible: true, status: "success", message: "Social data created successfully!" });
       setTimeout(() => {
         setTransactionStatus({ visible: false, status: "pending", message: "" });
       }, 2000);
       
       await loadData();
       setShowCreateModal(false);
-      setNewMiningData({ name: "", socialValue: "", activity: "", description: "" });
+      setNewMiningData({ name: "", value: "", description: "" });
     } catch (e: any) {
       const errorMessage = e.message?.includes("user rejected transaction") 
         ? "Transaction rejected by user" 
@@ -181,7 +209,7 @@ const App: React.FC = () => {
       setTransactionStatus({ visible: true, status: "error", message: errorMessage });
       setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
     } finally { 
-      setCreatingMining(false); 
+      setCreatingData(false); 
     }
   };
 
@@ -220,10 +248,13 @@ const App: React.FC = () => {
       setTransactionStatus({ visible: true, status: "pending", message: "Verifying decryption on-chain..." });
       
       const clearValue = result.decryptionResult.clearValues[encryptedValueHandle];
+      
       await loadData();
       
       setTransactionStatus({ visible: true, status: "success", message: "Data decrypted and verified successfully!" });
-      setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 2000);
+      setTimeout(() => {
+        setTransactionStatus({ visible: false, status: "pending", message: "" });
+      }, 2000);
       
       return Number(clearValue);
       
@@ -243,6 +274,13 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDecryptClick = async (data: SocialMiningData) => {
+    const decrypted = await decryptData(data.id);
+    if (decrypted !== null) {
+      setDecryptedValue(decrypted);
+    }
+  };
+
   const handleCheckAvailability = async () => {
     try {
       const contract = await getContractReadOnly();
@@ -257,18 +295,58 @@ const App: React.FC = () => {
     }
   };
 
-  const filteredMiningData = miningData.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         item.description.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = !filterVerified || item.isVerified;
-    return matchesSearch && matchesFilter;
-  });
+  const renderStatsPanel = () => {
+    return (
+      <div className="stats-panels">
+        <div className="stat-panel metal-gold">
+          <div className="stat-icon">👥</div>
+          <div className="stat-content">
+            <div className="stat-value">{stats.totalUsers}</div>
+            <div className="stat-label">Total Miners</div>
+          </div>
+        </div>
+        
+        <div className="stat-panel metal-silver">
+          <div className="stat-icon">💰</div>
+          <div className="stat-content">
+            <div className="stat-value">{stats.totalValue.toLocaleString()}</div>
+            <div className="stat-label">Total Value</div>
+          </div>
+        </div>
+        
+        <div className="stat-panel metal-bronze">
+          <div className="stat-icon">📊</div>
+          <div className="stat-content">
+            <div className="stat-value">{stats.avgScore}</div>
+            <div className="stat-label">Avg Score</div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
-  const stats = {
-    total: miningData.length,
-    verified: miningData.filter(m => m.isVerified).length,
-    totalValue: miningData.reduce((sum, m) => sum + (m.decryptedValue || 0), 0),
-    avgActivity: miningData.length > 0 ? miningData.reduce((sum, m) => sum + m.activityScore, 0) / miningData.length : 0
+  const renderContributionChart = () => {
+    return (
+      <div className="contribution-chart">
+        <h3>User Contribution Ranking</h3>
+        <div className="chart-bars">
+          {userContributions.slice(0, 5).map((user, index) => (
+            <div key={user.userId} className="chart-bar-container">
+              <div className="bar-info">
+                <span className="user-name">{user.name}</span>
+                <span className="user-score">{user.encryptedScore} pts</span>
+              </div>
+              <div className="chart-bar">
+                <div 
+                  className="bar-fill" 
+                  style={{ width: `${(user.encryptedScore / 1500) * 100}%` }}
+                ></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   if (!isConnected) {
@@ -276,8 +354,8 @@ const App: React.FC = () => {
       <div className="app-container">
         <header className="app-header">
           <div className="logo">
-            <h1>SocialMine_Z 🌟</h1>
-            <p>社交隱私挖礦 · FHE Protected</p>
+            <h1>SocialMine_Z 🔐</h1>
+            <span>Private Social Mining</span>
           </div>
           <div className="header-actions">
             <ConnectButton accountStatus="address" chainStatus="icon" showBalance={false}/>
@@ -286,17 +364,17 @@ const App: React.FC = () => {
         
         <div className="connection-prompt">
           <div className="connection-content">
-            <div className="connection-icon">🔐</div>
-            <h2>Connect Wallet to Start Private Social Mining</h2>
-            <p>Encrypt your social behavior data with FHE and earn rewards without compromising privacy</p>
-            <div className="connection-steps">
+            <div className="connection-icon">💎</div>
+            <h2>Connect Wallet to Start Mining</h2>
+            <p>Your social behavior is valuable. Mine it privately with FHE encryption.</p>
+            <div className="mining-steps">
               <div className="step">
                 <span>1</span>
-                <p>Connect wallet to initialize FHE system</p>
+                <p>Connect your wallet to initialize FHE system</p>
               </div>
               <div className="step">
                 <span>2</span>
-                <p>Encrypt social behavior data</p>
+                <p>Encrypt your social behavior data</p>
               </div>
               <div className="step">
                 <span>3</span>
@@ -312,8 +390,8 @@ const App: React.FC = () => {
   if (!isInitialized || fhevmInitializing) {
     return (
       <div className="loading-screen">
-        <div className="fhe-spinner"></div>
-        <p>Initializing FHE Encryption System...</p>
+        <div className="mining-spinner"></div>
+        <p>Initializing FHE Mining System...</p>
         <p className="loading-note">Securing your social data with homomorphic encryption</p>
       </div>
     );
@@ -321,8 +399,8 @@ const App: React.FC = () => {
 
   if (loading) return (
     <div className="loading-screen">
-      <div className="fhe-spinner"></div>
-      <p>Loading Social Mining Platform...</p>
+      <div className="mining-spinner"></div>
+      <p>Loading Social Mining Dashboard...</p>
     </div>
   );
 
@@ -330,319 +408,163 @@ const App: React.FC = () => {
     <div className="app-container">
       <header className="app-header">
         <div className="logo">
-          <h1>SocialMine_Z 🌟</h1>
-          <p>社交隱私挖礦 · FHE Protected</p>
+          <h1>SocialMine_Z 🔐</h1>
+          <span>Encrypted Social Behavior Mining</span>
         </div>
         
         <div className="header-actions">
-          <button onClick={handleCheckAvailability} className="availability-btn">
-            Check Availability
+          <button onClick={handleCheckAvailability} className="check-btn">
+            Check FHE Status
           </button>
-          <button onClick={() => setShowCreateModal(true)} className="create-btn">
-            + Add Social Data
+          <button onClick={() => setShowCreateModal(true)} className="mine-btn">
+            + Mine Social Data
           </button>
           <ConnectButton accountStatus="address" chainStatus="icon" showBalance={false}/>
         </div>
       </header>
       
-      <div className="main-content">
-        <div className="stats-panel">
-          <div className="stat-card">
-            <h3>Total Mining Data</h3>
-            <div className="stat-value">{stats.total}</div>
-          </div>
-          <div className="stat-card">
-            <h3>Verified Data</h3>
-            <div className="stat-value">{stats.verified}</div>
-          </div>
-          <div className="stat-card">
-            <h3>Total Value</h3>
-            <div className="stat-value">{stats.totalValue}</div>
-          </div>
-          <div className="stat-card">
-            <h3>Avg Activity</h3>
-            <div className="stat-value">{stats.avgActivity.toFixed(1)}</div>
-          </div>
-        </div>
-
-        <div className="controls-panel">
-          <div className="search-box">
-            <input 
-              type="text" 
-              placeholder="Search mining data..." 
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-          <div className="filters">
-            <label>
-              <input 
-                type="checkbox" 
-                checked={filterVerified}
-                onChange={(e) => setFilterVerified(e.target.checked)}
-              />
-              Show Verified Only
-            </label>
-            <button onClick={loadData} disabled={isRefreshing} className="refresh-btn">
-              {isRefreshing ? "Refreshing..." : "Refresh"}
+      <div className="dashboard-container">
+        <div className="main-panel">
+          <div className="panel-header">
+            <h2>Social Mining Dashboard</h2>
+            <button onClick={loadData} className="refresh-btn" disabled={isRefreshing}>
+              {isRefreshing ? "🔄" : "Refresh"}
             </button>
           </div>
-        </div>
-
-        <div className="mining-data-list">
-          {filteredMiningData.length === 0 ? (
-            <div className="no-data">
-              <p>No social mining data found</p>
-              <button onClick={() => setShowCreateModal(true)} className="create-btn">
-                Add First Data Point
-              </button>
-            </div>
-          ) : (
-            filteredMiningData.map((item, index) => (
-              <div 
-                key={index} 
-                className={`mining-item ${item.isVerified ? 'verified' : ''} ${selectedMining?.id === item.id ? 'selected' : ''}`}
-                onClick={() => setSelectedMining(item)}
-              >
-                <div className="item-header">
-                  <h3>{item.name}</h3>
-                  <span className={`status ${item.isVerified ? 'verified' : 'pending'}`}>
-                    {item.isVerified ? '✅ Verified' : '🔓 Pending'}
-                  </span>
+          
+          {renderStatsPanel()}
+          {renderContributionChart()}
+          
+          <div className="data-section">
+            <h3>Encrypted Mining Records</h3>
+            <div className="data-list">
+              {miningData.length === 0 ? (
+                <div className="no-data">
+                  <p>No mining records found</p>
+                  <button onClick={() => setShowCreateModal(true)} className="mine-btn">
+                    Start Mining
+                  </button>
                 </div>
-                <p className="description">{item.description}</p>
-                <div className="item-meta">
-                  <span>Activity: {item.activityScore}/10</span>
-                  <span>{new Date(item.timestamp * 1000).toLocaleDateString()}</span>
-                </div>
-                {item.isVerified && item.decryptedValue && (
-                  <div className="decrypted-value">
-                    Social Value: {item.decryptedValue}
+              ) : (
+                miningData.map((data, index) => (
+                  <div key={index} className="data-item metal-border">
+                    <div className="data-main">
+                      <div className="data-title">{data.name}</div>
+                      <div className="data-meta">
+                        <span>Score: {data.publicValue1}</span>
+                        <span>{new Date(data.timestamp * 1000).toLocaleDateString()}</span>
+                      </div>
+                      <div className="data-desc">{data.description}</div>
+                    </div>
+                    <div className="data-actions">
+                      <button 
+                        onClick={() => handleDecryptClick(data)}
+                        className={`decrypt-btn ${data.isVerified ? 'verified' : ''}`}
+                        disabled={isDecrypting}
+                      >
+                        {data.isVerified ? '✅ Verified' : isDecrypting ? '🔓...' : '🔓 Decrypt'}
+                      </button>
+                    </div>
                   </div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      {showCreateModal && (
-        <CreateMiningModal 
-          onSubmit={createMiningData}
-          onClose={() => setShowCreateModal(false)}
-          creating={creatingMining}
-          miningData={newMiningData}
-          setMiningData={setNewMiningData}
-          isEncrypting={isEncrypting}
-        />
-      )}
-
-      {selectedMining && (
-        <MiningDetailModal 
-          mining={selectedMining}
-          onClose={() => {
-            setSelectedMining(null);
-            setDecryptedValue(null);
-          }}
-          decryptedValue={decryptedValue}
-          isDecrypting={isDecrypting || fheIsDecrypting}
-          decryptData={() => decryptData(selectedMining.id)}
-        />
-      )}
-
-      {transactionStatus.visible && (
-        <div className="transaction-modal">
-          <div className="transaction-content">
-            <div className={`transaction-icon ${transactionStatus.status}`}>
-              {transactionStatus.status === "pending" && <div className="fhe-spinner"></div>}
-              {transactionStatus.status === "success" && "✓"}
-              {transactionStatus.status === "error" && "✗"}
+                ))
+              )}
             </div>
-            <div className="transaction-message">{transactionStatus.message}</div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-const CreateMiningModal: React.FC<{
-  onSubmit: () => void;
-  onClose: () => void;
-  creating: boolean;
-  miningData: any;
-  setMiningData: (data: any) => void;
-  isEncrypting: boolean;
-}> = ({ onSubmit, onClose, creating, miningData, setMiningData, isEncrypting }) => {
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target;
-    if (name === 'socialValue') {
-      const intValue = value.replace(/[^\d]/g, '');
-      setMiningData({ ...miningData, [name]: intValue });
-    } else {
-      setMiningData({ ...miningData, [name]: value });
-    }
-  };
-
-  return (
-    <div className="modal-overlay">
-      <div className="create-modal">
-        <div className="modal-header">
-          <h2>Add Social Mining Data</h2>
-          <button onClick={onClose} className="close-modal">×</button>
-        </div>
-        
-        <div className="modal-body">
-          <div className="fhe-notice">
-            <strong>FHE 🔐 Protection</strong>
-            <p>Social value will be encrypted using homomorphic encryption</p>
-          </div>
-          
-          <div className="form-group">
-            <label>Data Name *</label>
-            <input 
-              type="text" 
-              name="name" 
-              value={miningData.name} 
-              onChange={handleChange} 
-              placeholder="Enter data name..." 
-            />
-          </div>
-          
-          <div className="form-group">
-            <label>Social Value (Integer) *</label>
-            <input 
-              type="number" 
-              name="socialValue" 
-              value={miningData.socialValue} 
-              onChange={handleChange} 
-              placeholder="Enter social value..." 
-              min="0"
-            />
-            <div className="data-type-label">FHE Encrypted</div>
-          </div>
-          
-          <div className="form-group">
-            <label>Activity Score (1-10) *</label>
-            <input 
-              type="number" 
-              name="activity" 
-              value={miningData.activity} 
-              onChange={handleChange} 
-              placeholder="1-10" 
-              min="1" 
-              max="10"
-            />
-            <div className="data-type-label">Public Data</div>
-          </div>
-          
-          <div className="form-group">
-            <label>Description</label>
-            <textarea 
-              name="description" 
-              value={miningData.description} 
-              onChange={handleChange} 
-              placeholder="Describe this social data point..." 
-            />
           </div>
         </div>
         
-        <div className="modal-footer">
-          <button onClick={onClose} className="cancel-btn">Cancel</button>
-          <button 
-            onClick={onSubmit} 
-            disabled={creating || isEncrypting || !miningData.name || !miningData.socialValue || !miningData.activity}
-            className="submit-btn"
-          >
-            {creating || isEncrypting ? "Encrypting..." : "Create Data"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const MiningDetailModal: React.FC<{
-  mining: SocialMiningData;
-  onClose: () => void;
-  decryptedValue: number | null;
-  isDecrypting: boolean;
-  decryptData: () => Promise<number | null>;
-}> = ({ mining, onClose, decryptedValue, isDecrypting, decryptData }) => {
-  const handleDecrypt = async () => {
-    if (decryptedValue !== null) return;
-    await decryptData();
-  };
-
-  return (
-    <div className="modal-overlay">
-      <div className="detail-modal">
-        <div className="modal-header">
-          <h2>Mining Data Details</h2>
-          <button onClick={onClose} className="close-modal">×</button>
-        </div>
-        
-        <div className="modal-body">
-          <div className="mining-info">
-            <div className="info-row">
-              <span>Name:</span>
-              <strong>{mining.name}</strong>
-            </div>
-            <div className="info-row">
-              <span>Creator:</span>
-              <strong>{mining.creator.substring(0, 8)}...{mining.creator.substring(36)}</strong>
-            </div>
-            <div className="info-row">
-              <span>Created:</span>
-              <strong>{new Date(mining.timestamp * 1000).toLocaleString()}</strong>
-            </div>
-            <div className="info-row">
-              <span>Activity Score:</span>
-              <strong>{mining.activityScore}/10</strong>
-            </div>
-            <div className="info-row">
-              <span>Description:</span>
-              <p>{mining.description}</p>
-            </div>
-          </div>
-          
-          <div className="encryption-section">
-            <h3>FHE Encryption Status</h3>
-            <div className="encryption-status">
-              <div className="status-item">
-                <span>Social Value:</span>
-                <div className="value-display">
-                  {mining.isVerified ? 
-                    `${mining.decryptedValue} (On-chain Verified)` : 
-                    decryptedValue !== null ? 
-                    `${decryptedValue} (Locally Decrypted)` : 
-                    "🔒 Encrypted"
-                  }
+        <div className="side-panel">
+          <div className="user-ranking">
+            <h3>Top Miners</h3>
+            <div className="ranking-list">
+              {userContributions.map((user, index) => (
+                <div key={user.userId} className="rank-item">
+                  <div className="rank-number">#{index + 1}</div>
+                  <div className="rank-info">
+                    <div className="rank-name">{user.name}</div>
+                    <div className="rank-score">{user.encryptedScore} pts</div>
+                  </div>
+                  <div className="rank-badge">
+                    {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '💎'}
+                  </div>
                 </div>
-              </div>
-              
-              <button 
-                className={`decrypt-btn ${(mining.isVerified || decryptedValue !== null) ? 'decrypted' : ''}`}
-                onClick={handleDecrypt}
-                disabled={isDecrypting || mining.isVerified}
-              >
-                {isDecrypting ? "Decrypting..." : 
-                 mining.isVerified ? "✅ Verified" : 
-                 decryptedValue !== null ? "🔄 Re-verify" : 
-                 "🔓 Verify Decryption"}
-              </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {showCreateModal && (
+        <div className="modal-overlay">
+          <div className="create-modal metal-panel">
+            <div className="modal-header">
+              <h2>Mine Social Data</h2>
+              <button onClick={() => setShowCreateModal(false)} className="close-btn">×</button>
             </div>
             
-            <div className="fhe-explanation">
-              <p><strong>FHE Process:</strong> Data encrypted on-chain → Offline decryption → On-chain verification</p>
+            <div className="modal-body">
+              <div className="fhe-notice">
+                <strong>FHE 🔐 Protection</strong>
+                <p>Your social data will be encrypted using homomorphic encryption</p>
+              </div>
+              
+              <div className="form-group">
+                <label>Data Type</label>
+                <input 
+                  type="text" 
+                  value={newMiningData.name}
+                  onChange={(e) => setNewMiningData({...newMiningData, name: e.target.value})}
+                  placeholder="e.g., Likes, Shares, Comments"
+                />
+              </div>
+              
+              <div className="form-group">
+                <label>Value (Integer only)</label>
+                <input 
+                  type="number" 
+                  value={newMiningData.value}
+                  onChange={(e) => setNewMiningData({...newMiningData, value: e.target.value})}
+                  placeholder="Enter numeric value"
+                />
+                <span className="input-hint">FHE Encrypted Integer</span>
+              </div>
+              
+              <div className="form-group">
+                <label>Description</label>
+                <input 
+                  type="text" 
+                  value={newMiningData.description}
+                  onChange={(e) => setNewMiningData({...newMiningData, description: e.target.value})}
+                  placeholder="Brief description"
+                />
+              </div>
+            </div>
+            
+            <div className="modal-footer">
+              <button onClick={() => setShowCreateModal(false)} className="cancel-btn">Cancel</button>
+              <button 
+                onClick={createMiningData}
+                disabled={creatingData || isEncrypting || !newMiningData.name || !newMiningData.value}
+                className="submit-btn"
+              >
+                {creatingData || isEncrypting ? "Encrypting..." : "Mine Data"}
+              </button>
             </div>
           </div>
         </div>
-        
-        <div className="modal-footer">
-          <button onClick={onClose} className="close-btn">Close</button>
+      )}
+      
+      {transactionStatus.visible && (
+        <div className="notification">
+          <div className={`notification-content ${transactionStatus.status}`}>
+            <div className="notification-icon">
+              {transactionStatus.status === "pending" && "⏳"}
+              {transactionStatus.status === "success" && "✅"}
+              {transactionStatus.status === "error" && "❌"}
+            </div>
+            <div className="notification-message">{transactionStatus.message}</div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
